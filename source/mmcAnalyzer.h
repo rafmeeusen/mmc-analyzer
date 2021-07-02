@@ -5,6 +5,13 @@
 #include "mmcAnalyzerResults.h"
 #include "mmcSimulationDataGenerator.h"
 
+
+enum FrameType {
+	MMC_CMD,
+	MMC_RSP_48,
+        MMC_RSP_136,
+};
+
 class mmcAnalyzerSettings;
 class ANALYZER_EXPORT mmcAnalyzer : public Analyzer2
 {
@@ -22,11 +29,15 @@ public:
 	virtual bool NeedsRerun();
 
 protected: //functions
-    void ReadAndMarkCmdBits(U8 nrOfBits);
+    U32  ReadAndMarkCmdBits(U8 nrOfBits);
     bool GetCommandBit();
-
+    // stupid state machine:
+    enum FrameType SMgetExpected();
+    void               SMinit();
+    void               SMputActual(enum FrameType);
 
 protected: //vars
+        enum FrameType nextExpected;
 	std::auto_ptr< mmcAnalyzerSettings > mSettings;
 	std::auto_ptr< mmcAnalyzerResults > mResults;
 	AnalyzerChannelData* mClock;

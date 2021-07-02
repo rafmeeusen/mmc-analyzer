@@ -24,11 +24,11 @@ void mmcAnalyzer::SetupResults()
 
 
 
-void mmcAnalyzer::ReadAndMarkCmdBits(U8 nrOfBits)
+U32 mmcAnalyzer::ReadAndMarkCmdBits(U8 nrOfBits)
 {
     if ( nrOfBits > 32 ) {
         mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::ErrorX, mSettings->mCommandChannel );
-        return;
+        return 0;
     }
 
     U32 data = 0;
@@ -46,6 +46,7 @@ void mmcAnalyzer::ReadAndMarkCmdBits(U8 nrOfBits)
     frame.mFlags = 0;
     frame.mEndingSampleInclusive = mCommand->GetSampleNumber();
     mResults->AddFrame( frame );
+    return data;
 }
 
 // idea: get value of command on current rising edge of clock
@@ -60,6 +61,31 @@ bool mmcAnalyzer::GetCommandBit() {
 
     return ( cmdvalue == BIT_HIGH );
 }
+
+
+enum FrameType mmcAnalyzer::SMgetExpected() {
+    return mmcAnalyzer::nextExpected;
+}
+
+void mmcAnalyzer::SMinit() {
+    mmcAnalyzer::nextExpected = MMC_CMD;
+}
+
+void mmcAnalyzer::SMputActual( enum FrameType frame ) {
+/*
+MMC_CMD,
+MMC_RSP_48,
+MMC_RSP_136,
+*/
+    // most simple: cmd <--> rsp of 48 bits
+    if ( frame == MMC_CMD ) {
+        mmcAnalyzer::nextExpected = MMC_RSP_48;
+    } else {
+        mmcAnalyzer::nextExpected = MMC_CMD;
+    }   
+}
+
+
 
 void mmcAnalyzer::WorkerThread()
 {
@@ -77,13 +103,14 @@ void mmcAnalyzer::WorkerThread()
     mClock->AdvanceToNextEdge();
     // CLK ON RISING EDGE NOW
 
+    SMinit();
 
 // { Dot, ErrorDot, Square, ErrorSquare, UpArrow, DownArrow, X, ErrorX, Start, Stop, One, Zero }
-	for( ; ; )
+    for( ; ; )
     //for (int i=0; i<7;i++) 
     { 
 
-        // find start of first cmd:
+        // find start bit:
         bool cmdbit;
         do {
             cmdbit = GetCommandBit();    
@@ -91,24 +118,46 @@ void mmcAnalyzer::WorkerThread()
 
         mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::Start, mSettings->mCommandChannel );
 
-        // first bit is 0, now get 47 more bits
-        bool transmission_bit = GetCommandBit();
-        if ( transmission_bit ) {
-            // host talking
-        } else {
-            // card talking
+        enum FrameType expectedFrame = SMgetExpected();
+        bool transmission_bit;
+        bool endbit;
+        U32 cmdidx;
+        switch ( expectedFrame ) {
+            case MMC_CMD:
+                transmission_bit = GetCommandBit();
+                if ( ! transmission_bit ) {
+                    // expecting command, i.e. host talking
+                    // ERROR! 
+                }
+                cmdidx = ReadAndMarkCmdBits(6);
+                ReadAndMarkCmdBits(32);
+                ReadAndMarkCmdBits(7);
+                endbit = GetCommandBit();
+                if ( endbit ) {
+                    mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::Stop, mSettings->mCommandChannel );
+                } else {
+                    mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::ErrorX, mSettings->mCommandChannel );
+                }
+                mResults->CommitResults();
+
+                break;
+            case MMC_RSP_48:
+                transmission_bit = GetCommandBit();
+                if ( transmission_bit ) {
+                    // ERROR! 
+                }
+                
+                break; 
+            case MMC_RSP_136:
+                transmission_bit = GetCommandBit();
+                if ( transmission_bit ) {
+                    // ERROR! 
+                }
+                break;
+            default:
+                // not expecting this...
+                break;
         }
-            // get 6 cmd index bits
-            ReadAndMarkCmdBits(6);
-            ReadAndMarkCmdBits(32);
-            ReadAndMarkCmdBits(7);
-            bool endbit = GetCommandBit();
-            if ( endbit ) {
-                mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::Stop, mSettings->mCommandChannel );
-            } else {
-                mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::ErrorX, mSettings->mCommandChannel );
-            }
-            mResults->CommitResults();
 
 
     }
