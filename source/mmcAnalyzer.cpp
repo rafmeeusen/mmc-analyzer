@@ -72,17 +72,21 @@ void mmcAnalyzer::SMinit() {
 }
 
 void mmcAnalyzer::SMputActual( enum FrameType frame ) {
-/*
-MMC_CMD,
-MMC_RSP_48,
-MMC_RSP_136,
-*/
     // most simple: cmd <--> rsp of 48 bits
-    if ( frame == MMC_CMD ) {
-        mmcAnalyzer::nextExpected = MMC_RSP_48;
-    } else {
-        mmcAnalyzer::nextExpected = MMC_CMD;
-    }   
+    switch (frame) {
+        case MMC_CMD:
+            mmcAnalyzer::nextExpected = MMC_RSP_48;
+            break;
+        case MMC_CMD2:
+            mmcAnalyzer::nextExpected = MMC_RSP_136;
+            break;
+        case MMC_RSP_48:
+            mmcAnalyzer::nextExpected = MMC_CMD;
+            break;
+        case MMC_RSP_136:
+            mmcAnalyzer::nextExpected = MMC_CMD;
+            break;
+    }
 }
 
 
@@ -139,6 +143,11 @@ void mmcAnalyzer::WorkerThread()
                     mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::ErrorX, mSettings->mCommandChannel );
                 }
                 mResults->CommitResults();
+                if ( cmdidx == 2 ) { 
+                    SMputActual( MMC_CMD2 );
+                } else { 
+                    SMputActual( MMC_CMD );
+                }
 
                 break;
             case MMC_RSP_48:
@@ -146,13 +155,38 @@ void mmcAnalyzer::WorkerThread()
                 if ( transmission_bit ) {
                     // ERROR! 
                 }
-                
+                cmdidx = ReadAndMarkCmdBits(6); // depends on response type
+                ReadAndMarkCmdBits(32); // card status
+                ReadAndMarkCmdBits(7);  // crc
+                endbit = GetCommandBit();
+// { Dot, ErrorDot, Square, ErrorSquare, UpArrow, DownArrow, X, ErrorX, Start, Stop, One, Zero }
+                if ( endbit ) {
+                    mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::Square, mSettings->mCommandChannel );
+                } else {
+                    mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::ErrorX, mSettings->mCommandChannel );
+                }
+                mResults->CommitResults();
+                SMputActual( MMC_RSP_48 );
                 break; 
             case MMC_RSP_136:
                 transmission_bit = GetCommandBit();
                 if ( transmission_bit ) {
                     // ERROR! 
                 }
+                ReadAndMarkCmdBits(6); // for R2: 6 high level check bits.
+               
+                ReadAndMarkCmdBits(32); // CID or CSD incl. internal CRC7
+                ReadAndMarkCmdBits(32); // cont
+                ReadAndMarkCmdBits(32); // cont
+                ReadAndMarkCmdBits(24); // cont 
+                ReadAndMarkCmdBits(7); // CRC inside CID/CSD 
+                endbit = GetCommandBit();
+                if ( endbit ) {
+                    mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::X, mSettings->mCommandChannel );
+                } else {
+                    mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::ErrorX, mSettings->mCommandChannel );
+                }
+                SMputActual( MMC_RSP_136 );
                 break;
             default:
                 // not expecting this...

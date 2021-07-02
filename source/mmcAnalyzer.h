@@ -8,6 +8,7 @@
 
 enum FrameType {
 	MMC_CMD,
+        MMC_CMD2,
 	MMC_RSP_48,
         MMC_RSP_136,
 };
