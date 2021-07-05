@@ -10,6 +10,7 @@ mmcAnalyzer::mmcAnalyzer()
 	SetAnalyzerSettings( mSettings.get() );
 }
 
+
 mmcAnalyzer::~mmcAnalyzer()
 {
 	KillThread();
