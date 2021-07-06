@@ -23,37 +23,6 @@ void mmcAnalyzer::SetupResults()
 	mResults->AddChannelBubblesWillAppearOn( mSettings->mCommandChannel );
 }
 
-
-
-U32 mmcAnalyzer::ReadAndMarkCmdBits(U8 nrOfBits)
-{
-    if ( nrOfBits > 32 ) {
-        mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::ErrorX, mSettings->mCommandChannel );
-        return 0;
-    }
-
-    U32 data = 0;
-    U32 mask = 1 << (nrOfBits-1);
-    Frame frame;
-    frame.mStartingSampleInclusive = mClock->GetSampleNumber();
-    for (int i=0; i<nrOfBits; i++) {
-        if ( GetCommandBit() ) {
-            data |= mask;
-        } 
-        mask = mask >> 1;
-        mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::Dot, mSettings->mCommandChannel );
-    } 
-    frame.mData1 = data ;
-    frame.mFlags = 0;
-    frame.mEndingSampleInclusive = mCommand->GetSampleNumber();
-    mResults->AddFrame( frame );
-    ReportProgress( frame.mEndingSampleInclusive );
-    return data;
-}
-
-// idea: get value of command on current rising edge of clock
-//       AND: forward command stream to this sample
-//       AND: forward clock already to next rising edge
 bool mmcAnalyzer::GetCommandBit() {
     U64 risingedge_sample = mClock->GetSampleNumber();
     mCommand->AdvanceToAbsPosition( risingedge_sample ) ;
@@ -64,41 +33,141 @@ bool mmcAnalyzer::GetCommandBit() {
     return ( cmdvalue == BIT_HIGH );
 }
 
+// find start bit, and put nrbits in RawBits struct; nothing more
+RawBits mmcAnalyzer::GetBits(U16 nrbits)
+{
+    RawBits rb;
 
-enum FrameType mmcAnalyzer::SMgetExpected() {
+    // find start bit i.e. first LOW: 
+    bool tmpbit; 
+    do { 
+        tmpbit = GetCommandBit();    
+    } while (tmpbit);
+    rb.bits.push_back(tmpbit);
+    rb.samples.push_back(mCommand->GetSampleNumber());
+
+    // remaining bits
+    U16 remainingbits = nrbits - 1 ;
+    for ( int i=0; i<remainingbits; i++ ) {
+        tmpbit = GetCommandBit();
+        rb.bits.push_back(tmpbit);
+        rb.samples.push_back(mCommand->GetSampleNumber());
+    }
+
+    return rb;
+}
+
+PacketType mmcAnalyzer::SMgetExpected() {
     return mmcAnalyzer::nextExpected;
 }
 
 void mmcAnalyzer::SMinit() {
-    mmcAnalyzer::nextExpected = MMC_CMD;
+    PacketType firstpacket;
+    firstpacket.dir = true; 
+    firstpacket.bitlen = MMC_CMD_BITLEN; 
+    mmcAnalyzer::nextExpected = firstpacket;
 }
 
-void mmcAnalyzer::SMputActual( enum FrameType frame ) {
-    // most simple: cmd <--> rsp of 48 bits
-    switch (frame) {
-        case MMC_CMD:
-            mmcAnalyzer::nextExpected = MMC_RSP_48;
-            break;
-        case MMC_CMD2:
-            mmcAnalyzer::nextExpected = MMC_RSP_136;
-            break;
-        case MMC_RSP_48:
-            mmcAnalyzer::nextExpected = MMC_CMD;
-            break;
-        case MMC_RSP_136:
-            mmcAnalyzer::nextExpected = MMC_CMD;
-            break;
+void mmcAnalyzer::SMputActual( ParseResult pr ) {
+// TODO: this is the state machine logic; need to finish, esp. for long responses
+/*            mmcAnalyzer::OLDnextExpected = MMC_RSP_48;
+            mmcAnalyzer::OLDnextExpected = MMC_RSP_136;
+            mmcAnalyzer::OLDnextExpected = MMC_CMD;
+*/
+    if ( pr.dir ) {
+        // got a CMD
+        U16 cmdidx = pr.frames[0].mData1;
+        if ( cmdidx == 0 ) {
+            mmcAnalyzer::nextExpected.dir = true; // cmd
+            mmcAnalyzer::nextExpected.bitlen = MMC_CMD_BITLEN; 
+        } else {
+            mmcAnalyzer::nextExpected.dir = false; // rsp
+            mmcAnalyzer::nextExpected.bitlen = MMC_CMD_BITLEN; 
+        }
+    } else {
+        // got a RSP
+        mmcAnalyzer::nextExpected.dir = true; // cmd
+        mmcAnalyzer::nextExpected.bitlen = MMC_CMD_BITLEN; 
     }
 }
 
 
+// 1) check validity: direction OK?
+ParseResult mmcAnalyzer::Parse(PacketType pt, RawBits rb)
+{
+    ParseResult pr;
+    pr.isOK = true;
+    pr.dir = rb.bits[1];
+
+// check for obvious protocol errors
+// TODO: what to do in case of errors? immediately return pr??
+    if ( pr.dir != pt.dir ) {
+        pr.isOK = false;
+        // ERROR! 
+        // return pr;
+    }
+    // endbit always 1 ; OK?
+    bool endbit = rb.bits.back();
+    if ( ! endbit ) {
+        // ERROR! 
+        pr.isOK = false;
+        // return pr;
+    }
+
+    // store fixed bit locations
+    pr.startbit = rb.samples[0];
+    pr.transmissionbit = rb.samples[1];
+    pr.endbit = rb.samples.back();
+
+//////////////////////////////////////////
+// Command frames : 48 bits
+    FrameBitBoundaries cmdboundaries[3] = { {2,7}, {8,39}, {40,46}  };  // cmdidx | cmdarg | crc
+
+    Frame tmp;
+    U8 nrbits = 0;
+    U32 data = 0;
+    U32 mask = 0;
+    for ( FrameBitBoundaries b : cmdboundaries ) {
+        tmp.mFlags = 0;
+        tmp.mStartingSampleInclusive =  rb.samples[b.firstbitidx];
+        tmp.mEndingSampleInclusive = rb.samples[b.lastbitidx];
+         
+        nrbits = b.lastbitidx - b.firstbitidx + 1;
+        mask =  1 << (nrbits-1); 
+        data = 0;
+        for ( U8 bitidx = b.firstbitidx; bitidx <= b.lastbitidx; bitidx++ ) {
+            if ( rb.bits[bitidx] ) {
+                data |= mask;
+            }
+            mask = mask >> 1;
+        }
+        tmp.mData1 = data;
+        pr.frames.push_back(tmp);
+    }
+// TODO: rsp packets different?? at least long rsp packets!
+//////////////////////////////////////////
+
+    return pr;
+}
+
+// just put frames to analyzer results
+void mmcAnalyzer::PutResults( ParseResult pr )
+{
+    mResults->AddMarker( pr.startbit, AnalyzerResults::Start, mSettings->mCommandChannel );
+// { Dot, ErrorDot, Square, ErrorSquare, UpArrow, DownArrow, X, ErrorX, Start, Stop, One, Zero }
+    for ( Frame f : pr.frames ) {
+        mResults->AddFrame( f);
+    }
+    mResults->AddMarker( pr.endbit, AnalyzerResults::Stop, mSettings->mCommandChannel);
+    mResults->CommitResults();
+    ReportProgress( pr.endbit );
+}
 
 void mmcAnalyzer::WorkerThread()
 {
-	mSampleRateHz = GetSampleRate();
-
-	mClock = GetAnalyzerChannelData( mSettings->mClockChannel );
-	mCommand = GetAnalyzerChannelData( mSettings->mCommandChannel );
+    mSampleRateHz = GetSampleRate();
+    mClock = GetAnalyzerChannelData( mSettings->mClockChannel );
+    mCommand = GetAnalyzerChannelData( mSettings->mCommandChannel );
 
     // init: advance clk to first low sample, then to first rising edge
     if ( mClock->GetBitState() == BIT_HIGH ) {
@@ -111,94 +180,26 @@ void mmcAnalyzer::WorkerThread()
 
     SMinit();
 
-// { Dot, ErrorDot, Square, ErrorSquare, UpArrow, DownArrow, X, ErrorX, Start, Stop, One, Zero }
-    for( ; ; )
-    { 
+    PacketType pt;
+    RawBits rb;
+    ParseResult pr;
 
-        // find start bit:
-        bool cmdbit;
-        do {
-            cmdbit = GetCommandBit();    
-        } while (cmdbit);
-
-        mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::Start, mSettings->mCommandChannel );
-
-        enum FrameType expectedFrame = SMgetExpected();
-        bool transmission_bit;
-        bool endbit;
-        U32 cmdidx;
-        switch ( expectedFrame ) {
-            case MMC_CMD:
-                transmission_bit = GetCommandBit();
-                if ( ! transmission_bit ) {
-                    // expecting command, i.e. host talking
-                    // ERROR! 
-                }
-                cmdidx = ReadAndMarkCmdBits(6);
-                ReadAndMarkCmdBits(32);
-                ReadAndMarkCmdBits(7);
-                endbit = GetCommandBit();
-                if ( endbit ) {
-                    mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::Stop, mSettings->mCommandChannel );
-                } else {
-                    mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::ErrorX, mSettings->mCommandChannel );
-                }
-                mResults->CommitResults();
-                if ( cmdidx == 2 ) { 
-                    SMputActual( MMC_CMD2 );
-                } else { 
-                    SMputActual( MMC_CMD );
-                }
-
-                break;
-            case MMC_RSP_48:
-                transmission_bit = GetCommandBit();
-                if ( transmission_bit ) {
-                    // ERROR! 
-                }
-                cmdidx = ReadAndMarkCmdBits(6); // depends on response type
-                ReadAndMarkCmdBits(32); // card status
-                ReadAndMarkCmdBits(7);  // crc
-                endbit = GetCommandBit();
-// { Dot, ErrorDot, Square, ErrorSquare, UpArrow, DownArrow, X, ErrorX, Start, Stop, One, Zero }
-                if ( endbit ) {
-                    mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::Square, mSettings->mCommandChannel );
-                } else {
-                    mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::ErrorX, mSettings->mCommandChannel );
-                }
-                mResults->CommitResults();
-                SMputActual( MMC_RSP_48 );
-                break; 
-            case MMC_RSP_136:
-                transmission_bit = GetCommandBit();
-                if ( transmission_bit ) {
-                    // ERROR! 
-                }
-                ReadAndMarkCmdBits(6); // for R2: 6 high level check bits.
-               
-                ReadAndMarkCmdBits(32); // CID or CSD incl. internal CRC7
-                ReadAndMarkCmdBits(32); // cont
-                ReadAndMarkCmdBits(32); // cont
-                ReadAndMarkCmdBits(24); // cont 
-                ReadAndMarkCmdBits(7); // CRC inside CID/CSD 
-                endbit = GetCommandBit();
-                if ( endbit ) {
-                    mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::X, mSettings->mCommandChannel );
-                } else {
-                    mResults->AddMarker( mCommand->GetSampleNumber(), AnalyzerResults::ErrorX, mSettings->mCommandChannel );
-                }
-                SMputActual( MMC_RSP_136 );
-                break;
-            default:
-                // not expecting this...
-                break;
-        }
-
-
+    for(;;) {
+        pt = SMgetExpected();
+        rb = GetBits(pt.bitlen);
+        pr = Parse(pt, rb);
+        PutResults( pr );
+        SMputActual( pr );
     }
 
-
-
+/*
+TODO: introduce protocol error in above for loop
+        if ( ! pr.isOK ) {
+            // todo: protocol error
+//            break; // just stop parsing for now ; maybe later try to recover
+        }
+        
+*/
 }
 
 bool mmcAnalyzer::NeedsRerun()

@@ -5,13 +5,36 @@
 #include "mmcAnalyzerResults.h"
 #include "mmcSimulationDataGenerator.h"
 
+#include <vector>
+using namespace std;
 
-enum FrameType {
-	MMC_CMD,
-        MMC_CMD2,
-	MMC_RSP_48,
-        MMC_RSP_136,
-};
+#define MMC_CMD_BITLEN      48
+
+typedef struct _PacketType {
+    bool dir;
+    U16  bitlen;
+} PacketType ;
+
+typedef struct _RawBits {
+    vector<bool> bits;
+    vector<U64> samples;
+} RawBits ;
+
+// respresents parsed packet (i.e. cmd or rsp)
+typedef struct _ParseResult {
+    bool isOK;
+    bool dir;
+    U64  startbit;
+    U64  transmissionbit;
+    U64  endbit;
+    vector<Frame> frames;
+} ParseResult ;
+
+typedef struct _FrameBitBoundaries {
+    U8 firstbitidx;
+    U8 lastbitidx;
+} FrameBitBoundaries;
+
 
 class mmcAnalyzerSettings;
 class ANALYZER_EXPORT mmcAnalyzer : public Analyzer2
@@ -30,15 +53,21 @@ public:
 	virtual bool NeedsRerun();
 
 protected: //functions
-    U32  ReadAndMarkCmdBits(U8 nrOfBits);
-    bool GetCommandBit();
     // stupid state machine:
-    enum FrameType SMgetExpected();
+    PacketType SMgetExpected();
     void               SMinit();
-    void               SMputActual(enum FrameType);
+    void               SMputActual(ParseResult);
+    // parsing functions:
+    U32  ReadBits(U8 nrOfBits);
+    bool GetCommandBit();
+    RawBits GetBits(U16);
+    ParseResult Parse(PacketType, RawBits);
+
+    // create analyzer results 
+    void PutResults( ParseResult );
 
 protected: //vars
-        enum FrameType nextExpected;
+        PacketType nextExpected;
 	std::auto_ptr< mmcAnalyzerSettings > mSettings;
 	std::auto_ptr< mmcAnalyzerResults > mResults;
 	AnalyzerChannelData* mClock;
