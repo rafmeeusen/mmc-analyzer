@@ -8,7 +8,9 @@
 #include <vector>
 using namespace std;
 
-#define MMC_CMD_BITLEN      48
+#define MMC_CMD_BITLEN           48
+#define MMC_RSP_DEFAULT_BITLEN   48
+#define MMC_RSP2_BITLEN         136
 
 typedef struct _PacketType {
     bool dir;

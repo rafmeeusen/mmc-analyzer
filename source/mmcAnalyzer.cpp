@@ -10,7 +10,6 @@ mmcAnalyzer::mmcAnalyzer()
 	SetAnalyzerSettings( mSettings.get() );
 }
 
-
 mmcAnalyzer::~mmcAnalyzer()
 {
 	KillThread();
@@ -68,21 +67,22 @@ void mmcAnalyzer::SMinit() {
     mmcAnalyzer::nextExpected = firstpacket;
 }
 
+// state machine logic: what packet size is expected next depending on currently parsed packet?
+// IN: pr = actual parse result
+// OUT: mmcAnalyzer::nextExpected variable
 void mmcAnalyzer::SMputActual( ParseResult pr ) {
-// TODO: this is the state machine logic; need to finish, esp. for long responses
-/*            mmcAnalyzer::OLDnextExpected = MMC_RSP_48;
-            mmcAnalyzer::OLDnextExpected = MMC_RSP_136;
-            mmcAnalyzer::OLDnextExpected = MMC_CMD;
-*/
     if ( pr.dir ) {
         // got a CMD
         U16 cmdidx = pr.frames[0].mData1;
         if ( cmdidx == 0 ) {
             mmcAnalyzer::nextExpected.dir = true; // cmd
             mmcAnalyzer::nextExpected.bitlen = MMC_CMD_BITLEN; 
+        } else if ( cmdidx == 2 ) {
+            mmcAnalyzer::nextExpected.dir = false; // rsp
+            mmcAnalyzer::nextExpected.bitlen = MMC_RSP2_BITLEN; 
         } else {
             mmcAnalyzer::nextExpected.dir = false; // rsp
-            mmcAnalyzer::nextExpected.bitlen = MMC_CMD_BITLEN; 
+            mmcAnalyzer::nextExpected.bitlen = MMC_RSP_DEFAULT_BITLEN; 
         }
     } else {
         // got a RSP
@@ -119,9 +119,19 @@ ParseResult mmcAnalyzer::Parse(PacketType pt, RawBits rb)
     pr.transmissionbit = rb.samples[1];
     pr.endbit = rb.samples.back();
 
-//////////////////////////////////////////
-// Command frames : 48 bits
-    FrameBitBoundaries cmdboundaries[3] = { {2,7}, {8,39}, {40,46}  };  // cmdidx | cmdarg | crc
+    // parse other bits according to packet type
+    vector<FrameBitBoundaries> cmdboundaries;
+
+    // FrameBitBoundaries cmdboundaries;
+    if ( pt.bitlen == MMC_RSP2_BITLEN ) {
+        cmdboundaries.push_back( {2,7} );    // 6 check bits
+        cmdboundaries.push_back( {8, 134} ); // 127 CID or CSD bits 
+ 
+    } else {
+        cmdboundaries.push_back( {2,7} );   // cmdidx
+        cmdboundaries.push_back( {8,39} );  // cmdarg
+        cmdboundaries.push_back( {40,46} ); // crc
+    }
 
     Frame tmp;
     U8 nrbits = 0;
@@ -144,8 +154,6 @@ ParseResult mmcAnalyzer::Parse(PacketType pt, RawBits rb)
         tmp.mData1 = data;
         pr.frames.push_back(tmp);
     }
-// TODO: rsp packets different?? at least long rsp packets!
-//////////////////////////////////////////
 
     return pr;
 }
