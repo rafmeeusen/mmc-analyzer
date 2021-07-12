@@ -15,6 +15,8 @@ using namespace std;
 typedef struct _PacketType {
     bool dir;
     U16  bitlen;
+    bool isCID;
+    bool isCSD;
 } PacketType ;
 
 typedef struct _RawBits {

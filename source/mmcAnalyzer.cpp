@@ -61,16 +61,18 @@ PacketType mmcAnalyzer::SMgetExpected() {
 }
 
 void mmcAnalyzer::SMinit() {
-    PacketType firstpacket;
-    firstpacket.dir = true; 
-    firstpacket.bitlen = MMC_CMD_BITLEN; 
-    mmcAnalyzer::nextExpected = firstpacket;
+    mmcAnalyzer::nextExpected.dir = true; 
+    mmcAnalyzer::nextExpected.bitlen = MMC_CMD_BITLEN;
+    mmcAnalyzer::nextExpected.isCID = false;
+    mmcAnalyzer::nextExpected.isCSD = false;
 }
 
 // state machine logic: what packet size is expected next depending on currently parsed packet?
 // IN: pr = actual parse result
 // OUT: mmcAnalyzer::nextExpected variable
 void mmcAnalyzer::SMputActual( ParseResult pr ) {
+    mmcAnalyzer::nextExpected.isCID = false;
+    mmcAnalyzer::nextExpected.isCSD = false;
     if ( pr.dir ) {
         // got a CMD
         U16 cmdidx = pr.frames[0].mData1;
@@ -80,6 +82,11 @@ void mmcAnalyzer::SMputActual( ParseResult pr ) {
         } else if ( cmdidx == 2 ) {
             mmcAnalyzer::nextExpected.dir = false; // rsp
             mmcAnalyzer::nextExpected.bitlen = MMC_RSP2_BITLEN; 
+            mmcAnalyzer::nextExpected.isCID = true;
+        } else if ( cmdidx == 9 ) {
+            mmcAnalyzer::nextExpected.dir = false; // rsp
+            mmcAnalyzer::nextExpected.bitlen = MMC_RSP2_BITLEN; 
+            mmcAnalyzer::nextExpected.isCSD = true;
         } else {
             mmcAnalyzer::nextExpected.dir = false; // rsp
             mmcAnalyzer::nextExpected.bitlen = MMC_RSP_DEFAULT_BITLEN; 
@@ -124,13 +131,28 @@ ParseResult mmcAnalyzer::Parse(PacketType pt, RawBits rb)
 
     // FrameBitBoundaries cmdboundaries;
     if ( pt.bitlen == MMC_RSP2_BITLEN ) {
-        cmdboundaries.push_back( {2,7} );    // 6 check bits
-        cmdboundaries.push_back( {8, 134} ); // 127 CID or CSD bits 
+        if ( pt.isCID ) {
+            // 120 CID bits = 15 CID bytes (without CRC)
+            cmdboundaries.push_back( {2,7} );            // 6 check bits
+            cmdboundaries.push_back( {8, (8+24-1)} );    // 3 CID bytes
+            cmdboundaries.push_back( {32,(32+48-1)} );   // 6 CID bytes ~ 48 bits PNM
+            cmdboundaries.push_back( {80,(80+48-1)} );   // 6 CID bytes 
+            cmdboundaries.push_back( {128, 134} );       // 7 CRC bits part of CID
+        } else {
+            // assuming isCSD ; also 15 bytes
+            cmdboundaries.push_back( {2,7} );            // 6 check bits
+            cmdboundaries.push_back( {8, (8+32-1)} );    // 4 CSD bytes
+            cmdboundaries.push_back( {40, (40+16-1)} );  // 2 CSD bytes
+            cmdboundaries.push_back( {56, (56+24-1)} );  // 3 CSD bytes
+            cmdboundaries.push_back( {80, (80+24-1)} );  // 3 CSD bytes
+            cmdboundaries.push_back( {104,(104+24-1)} ); // 3 CSD bytes
+            cmdboundaries.push_back( {128, 134} );       // 7 CRC bits part of CSD
+        }
  
     } else {
-        cmdboundaries.push_back( {2,7} );   // cmdidx
-        cmdboundaries.push_back( {8,39} );  // cmdarg
-        cmdboundaries.push_back( {40,46} ); // crc
+        cmdboundaries.push_back( {2,7} );   // 6 bits cmdidx
+        cmdboundaries.push_back( {8,39} );  // 32 bits cmdarg 
+        cmdboundaries.push_back( {40,46} ); // 7 bits crc
     }
 
     Frame tmp;
@@ -162,6 +184,11 @@ ParseResult mmcAnalyzer::Parse(PacketType pt, RawBits rb)
 void mmcAnalyzer::PutResults( ParseResult pr )
 {
     mResults->AddMarker( pr.startbit, AnalyzerResults::Start, mSettings->mCommandChannel );
+    if ( pr.dir ) {
+        // mark CMD with X, RSP unmarked
+        mResults->AddMarker( pr.transmissionbit, AnalyzerResults::X, mSettings->mCommandChannel );
+    }
+
 // { Dot, ErrorDot, Square, ErrorSquare, UpArrow, DownArrow, X, ErrorX, Start, Stop, One, Zero }
     for ( Frame f : pr.frames ) {
         mResults->AddFrame( f);
