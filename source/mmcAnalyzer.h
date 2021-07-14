@@ -35,8 +35,8 @@ typedef struct _ParseResult {
 } ParseResult ;
 
 typedef struct _FrameBitBoundaries {
-    U8 firstbitidx;
-    U8 lastbitidx;
+    U16 firstbitidx;
+    U16 lastbitidx;
 } FrameBitBoundaries;
 
 

@@ -156,18 +156,18 @@ ParseResult mmcAnalyzer::Parse(PacketType pt, RawBits rb)
     }
 
     Frame tmp;
-    U8 nrbits = 0;
-    U32 data = 0;
-    U32 mask = 0;
+    U16 nrbits = 0;
+    U64 data = 0;
+    U64 mask = 0;
     for ( FrameBitBoundaries b : cmdboundaries ) {
         tmp.mFlags = 0;
         tmp.mStartingSampleInclusive =  rb.samples[b.firstbitidx];
         tmp.mEndingSampleInclusive = rb.samples[b.lastbitidx];
          
         nrbits = b.lastbitidx - b.firstbitidx + 1;
-        mask =  1 << (nrbits-1); 
+        mask =  1LL << (nrbits-1); 
         data = 0;
-        for ( U8 bitidx = b.firstbitidx; bitidx <= b.lastbitidx; bitidx++ ) {
+        for ( U16 bitidx = b.firstbitidx; bitidx <= b.lastbitidx; bitidx++ ) {
             if ( rb.bits[bitidx] ) {
                 data |= mask;
             }
