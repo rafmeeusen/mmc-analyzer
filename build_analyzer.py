@@ -43,8 +43,9 @@ include_paths = [ "./AnalyzerSDK/include" ]
 link_paths = [ "./AnalyzerSDK/lib" ]
 link_dependencies = [ "-lAnalyzer" ] #refers to libAnalyzer.dylib or libAnalyzer.so
 
-debug_compile_flags = "-O0 -w -c -fpic -g"
-release_compile_flags = "-O3 -w -c -fpic"
+common_compile_flags = " -c -fpic -Wno-deprecated-declarations "
+debug_compile_flags = "-O0 -g " + common_compile_flags
+release_compile_flags = "-O3 " + common_compile_flags
 
 def run_command(cmd):
     "Display cmd, then run it in a subshell, raise if there's an error"
